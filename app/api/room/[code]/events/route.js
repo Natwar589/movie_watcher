@@ -4,6 +4,8 @@
  * POST /api/room/[code]/events – broadcast OR targeted event
  */
 
+export const dynamic = 'force-dynamic';
+
 const rooms = new Map();
 
 function getRoom(code) {
