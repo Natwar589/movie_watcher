@@ -342,3 +342,45 @@
 .btnVirtualCam:hover {
   background: var(--bg-surface-high);
 }
+
+/* Small Virtual Cam button beside main Enable Camera */
+.btnVirtualCamSmall {
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--text-muted);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  font-size: 0.62rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+
+.btnVirtualCamSmall:hover {
+  background: var(--bg-surface-card);
+  color: var(--text-primary);
+}
+
+.camStartGroup {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+/* Pulsing dot shown while remote WebRTC stream is connecting */
+.waitingDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-amber, #f59e0b);
+  animation: pulse-dot 1.2s ease-in-out infinite;
+  margin-right: 4px;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}

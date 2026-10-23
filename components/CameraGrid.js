@@ -2,164 +2,312 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import styles from './CameraGrid.module.css';
 
-export default function CameraGrid({ members = [], user, code }) {
-  const localVideoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const animFrameRef = useRef(null);
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
+};
 
-  const [camEnabled, setCamEnabled] = useState(false);
-  const [camError, setCamError] = useState('');
-  const [micEnabled, setMicEnabled] = useState(true);
-  const [stream, setStream] = useState(null);
-  const [isVirtualCam, setIsVirtualCam] = useState(false);
-  const [copied, setCopied] = useState(false);
+/* ── Peer video element — handles attaching remote stream ── */
+function PeerVideo({ peer, stream }) {
+  const videoRef = useRef(null);
 
-  /* Attach media stream safely whenever node or stream changes */
-  const setLocalVideoNode = useCallback((node) => {
-    localVideoRef.current = node;
-    if (node && stream) {
-      if (node.srcObject !== stream) {
-        node.srcObject = stream;
-      }
-      node.play().catch((e) => console.warn('Local video auto-play warning:', e));
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(() => {});
     }
   }, [stream]);
 
-  /* Effect to ensure video element always receives stream upon mounting/updating */
-  useEffect(() => {
-    if (localVideoRef.current && stream) {
-      if (localVideoRef.current.srcObject !== stream) {
-        localVideoRef.current.srcObject = stream;
-      }
-      localVideoRef.current.play().catch(() => {});
-    }
-  }, [stream, camEnabled]);
+  return (
+    <div className={styles.camCard}>
+      <div className={styles.camBox}>
+        {stream ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            className={styles.camVideo}
+          />
+        ) : (
+          <div className={styles.camPlaceholder}>
+            <span className={styles.avatarEmoji}>{peer.avatar || '👤'}</span>
+            <div className={styles.genuinePeerLabel}>
+              <span className={styles.waitingDot} />
+              Connecting camera…
+            </div>
+          </div>
+        )}
+        <div className={styles.camGlow} />
+        <div className={styles.camInfo}>
+          <span className={styles.camName}>
+            {peer.name}
+            {peer.isHost && <span className={styles.hostCrown}>👑</span>}
+          </span>
+          <div className={styles.camStatus}>
+            <span className={styles.liveDot} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-  /* ─────────────────────────────────────────────────────────
-     START REAL HARDWARE CAMERA (with robust fallback)
-     ───────────────────────────────────────────────────────── */
+export default function CameraGrid({ members = [], user, code }) {
+  const localVideoRef    = useRef(null);
+  const localStreamRef   = useRef(null);   // MediaStream for my camera
+  const pcsRef           = useRef({});      // Map<peerId, RTCPeerConnection>
+  const pendingRef       = useRef({});      // ICE candidates buffered before remote desc
+  const meRef            = useRef(user);
+  meRef.current          = user;
+
+  const [camEnabled,  setCamEnabled]  = useState(false);
+  const [micEnabled,  setMicEnabled]  = useState(true);
+  const [camError,    setCamError]    = useState('');
+  const [isVirtualCam,setIsVirtualCam]= useState(false);
+  const [copied,      setCopied]      = useState(false);
+  const [remoteStreams, setRemoteStreams] = useState({}); // Map<peerId, MediaStream>
+
+  const animFrameRef = useRef(null);
+
+  /* ── Signal helper: POST a targeted WebRTC message via SSE API ── */
+  const signal = useCallback((to, payload) => {
+    fetch(`/api/room/${code}/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, to, from: meRef.current?.id }),
+    }).catch(() => {});
+  }, [code]);
+
+  /* ── Create RTCPeerConnection for a peer ── */
+  const createPC = useCallback((peerId, polite) => {
+    if (pcsRef.current[peerId]) return pcsRef.current[peerId];
+
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+    pcsRef.current[peerId] = pc;
+    pendingRef.current[peerId] = [];
+
+    // Add local tracks if camera is on
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
+        pc.addTrack(track, localStreamRef.current);
+      });
+    }
+
+    // Receive remote video stream
+    pc.ontrack = (event) => {
+      const [remoteStream] = event.streams;
+      setRemoteStreams(prev => ({ ...prev, [peerId]: remoteStream }));
+    };
+
+    // ICE candidates
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) {
+        signal(peerId, { type: 'ICE', candidate });
+      }
+    };
+
+    // Negotiation needed (called when tracks are added)
+    pc.onnegotiationneeded = async () => {
+      if (!polite) return; // Only the "impolite" (newer joiner) makes offer
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        signal(peerId, { type: 'OFFER', sdp: pc.localDescription });
+      } catch {}
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+        setRemoteStreams(prev => {
+          const next = { ...prev };
+          delete next[peerId];
+          return next;
+        });
+        delete pcsRef.current[peerId];
+      }
+    };
+
+    return pc;
+  }, [signal]);
+
+  /* ── Handle incoming WebRTC signaling messages ── */
+  const handleSignal = useCallback(async (data) => {
+    const { type, from, sdp, candidate } = data;
+    if (!from || from === meRef.current?.id) return;
+
+    if (type === 'OFFER') {
+      const pc = createPC(from, false); // we are polite (responder)
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        // Flush buffered ICE
+        for (const c of (pendingRef.current[from] || [])) {
+          await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+        }
+        pendingRef.current[from] = [];
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        signal(from, { type: 'ANSWER', sdp: pc.localDescription });
+      } catch {}
+    } else if (type === 'ANSWER') {
+      const pc = pcsRef.current[from];
+      if (pc && pc.signalingState !== 'stable') {
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+          for (const c of (pendingRef.current[from] || [])) {
+            await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+          }
+          pendingRef.current[from] = [];
+        } catch {}
+      }
+    } else if (type === 'ICE') {
+      const pc = pcsRef.current[from];
+      if (pc && pc.remoteDescription) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+      } else {
+        // Buffer ICE until remote desc is set
+        if (!pendingRef.current[from]) pendingRef.current[from] = [];
+        pendingRef.current[from].push(candidate);
+      }
+    }
+  }, [createPC, signal]);
+
+  /* ── Subscribe to SSE room events (includes WebRTC signals) ── */
+  useEffect(() => {
+    if (!code || !user?.id) return;
+
+    const es = new EventSource(`/api/room/${code}/events?peerId=${user.id}`);
+
+    es.onmessage = async (event) => {
+      let data;
+      try { data = JSON.parse(event.data); } catch { return; }
+      if (!data?.type) return;
+
+      if (['OFFER', 'ANSWER', 'ICE'].includes(data.type)) {
+        await handleSignal(data);
+      }
+      // Other event types (PEER_JOIN etc.) are handled in page.js via its own SSE connection
+    };
+
+    return () => es.close();
+  }, [code, user?.id, handleSignal]);
+
+  /* ── When a new member joins, initiate WebRTC call TO them ── */
+  useEffect(() => {
+    const peers = members.filter(m => !m.isMe);
+    peers.forEach(peer => {
+      if (!pcsRef.current[peer.id]) {
+        // We are the "impolite" peer — we initiate the offer
+        const pc = createPC(peer.id, true);
+        // Add local tracks to trigger onnegotiationneeded
+        if (localStreamRef.current && pc.getSenders().length === 0) {
+          localStreamRef.current.getTracks().forEach(track => {
+            pc.addTrack(track, localStreamRef.current);
+          });
+        }
+      }
+    });
+  }, [members, createPC]);
+
+  /* ── Start real hardware camera ── */
   const startCamera = useCallback(async () => {
     setCamError('');
-
-    if (typeof window === 'undefined') return;
-
     if (!navigator?.mediaDevices?.getUserMedia) {
-      setCamError('Camera requires a secure context (https:// or http://localhost:3000).');
+      setCamError('Camera requires a secure HTTPS connection or localhost.');
       return;
     }
-
     try {
-      let s = null;
-      // 1. Try requesting both camera and echo-cancelled microphone
+      let s;
       try {
         s = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: 'user',
-          },
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
-      } catch (audioVideoErr) {
-        console.warn('Audio+video request failed, attempting video-only fallback:', audioVideoErr);
-        // 2. If microphone fails or is blocked, fallback to video-only
-        s = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: false,
-        });
+      } catch {
+        s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         setMicEnabled(false);
       }
 
-      setStream(s);
-      setIsVirtualCam(false);
+      localStreamRef.current = s;
       setCamEnabled(true);
+      setIsVirtualCam(false);
       setCamError('');
 
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = s;
         localVideoRef.current.play().catch(() => {});
       }
+
+      // Add tracks to all existing peer connections
+      Object.values(pcsRef.current).forEach(pc => {
+        s.getTracks().forEach(track => {
+          const senders = pc.getSenders();
+          if (!senders.find(s => s.track?.kind === track.kind)) {
+            pc.addTrack(track, s);
+          }
+        });
+      });
+
+      // Create new PCs for all current peers and send offers
+      const peers = members.filter(m => !m.isMe);
+      peers.forEach(peer => {
+        const pc = createPC(peer.id, true);
+        if (pc.getSenders().length === 0) {
+          s.getTracks().forEach(track => pc.addTrack(track, s));
+        }
+      });
+
     } catch (err) {
-      console.error('Camera access error:', err);
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setCamError('Camera permission was denied in your browser. Click the lock/camera icon in your URL address bar to allow camera access.');
-      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-        setCamError('No physical webcam detected on this device. You can test with the Virtual Camera below.');
-      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-        setCamError('Webcam is already in use by another application (e.g. Zoom, FaceTime, or another tab).');
+        setCamError('Camera permission denied. Click the camera icon in your address bar to allow access.');
+      } else if (err.name === 'NotFoundError') {
+        setCamError('No webcam found on this device.');
+      } else if (err.name === 'NotReadableError') {
+        setCamError('Webcam is in use by another app (e.g. Zoom, FaceTime).');
       } else {
-        setCamError(`Could not access camera: ${err.message || err.name}`);
+        setCamError(`Could not start camera: ${err.message}`);
       }
     }
-  }, []);
+  }, [members, createPC]);
 
-  /* ─────────────────────────────────────────────────────────
-     VIRTUAL TEST CAMERA (Canvas generator for testing when
-     hardware camera is blocked or not plugged in)
-     ───────────────────────────────────────────────────────── */
+  /* ── Virtual test camera (canvas-based) ── */
   const startVirtualCam = useCallback(() => {
     try {
       const canvas = document.createElement('canvas');
-      canvas.width = 320;
-      canvas.height = 240;
+      canvas.width = 320; canvas.height = 240;
       const ctx = canvas.getContext('2d');
-
       let hue = 0;
+
       const drawFrame = () => {
         hue = (hue + 1) % 360;
-        // Background gradient
         const grad = ctx.createLinearGradient(0, 0, 320, 240);
         grad.addColorStop(0, `hsl(${hue}, 60%, 20%)`);
         grad.addColorStop(1, `hsl(${(hue + 60) % 360}, 70%, 10%)`);
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, 320, 240);
 
-        // Grid lines
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-        ctx.lineWidth = 1;
-        for (let x = 0; x < 320; x += 30) {
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, 240);
-          ctx.stroke();
-        }
-
-        // Animated pulse circle
         const radius = 35 + Math.sin(Date.now() / 300) * 8;
         ctx.beginPath();
         ctx.arc(160, 100, radius, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(99, 102, 241, 0.35)';
+        ctx.fillStyle = 'rgba(99,102,241,0.35)';
         ctx.fill();
-        ctx.strokeStyle = '#818cf8';
-        ctx.lineWidth = 2;
-        ctx.stroke();
+        ctx.strokeStyle = '#818cf8'; ctx.lineWidth = 2; ctx.stroke();
 
-        // User avatar emoji
-        ctx.font = '36px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
+        ctx.font = '36px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(user?.avatar || '👤', 160, 100);
 
-        // Text banner
-        ctx.font = 'bold 12px sans-serif';
-        ctx.fillStyle = '#f8fafc';
-        ctx.fillText(`${user?.name || 'You'} (Live Feed)`, 160, 160);
-
-        ctx.font = '10px monospace';
-        ctx.fillStyle = '#34d399';
-        ctx.fillText(`● VIRTUAL CAM • ${new Date().toLocaleTimeString()}`, 160, 185);
+        ctx.font = 'bold 12px sans-serif'; ctx.fillStyle = '#f8fafc';
+        ctx.fillText(`${user?.name || 'You'} (Virtual)`, 160, 160);
+        ctx.font = '10px monospace'; ctx.fillStyle = '#34d399';
+        ctx.fillText(`● ${new Date().toLocaleTimeString()}`, 160, 185);
 
         animFrameRef.current = requestAnimationFrame(drawFrame);
       };
-
       drawFrame();
 
       const vStream = canvas.captureStream(30);
-      setStream(vStream);
+      localStreamRef.current = vStream;
       setIsVirtualCam(true);
       setCamEnabled(true);
       setCamError('');
@@ -168,67 +316,67 @@ export default function CameraGrid({ members = [], user, code }) {
         localVideoRef.current.srcObject = vStream;
         localVideoRef.current.play().catch(() => {});
       }
+
+      // Share virtual stream with existing peers
+      Object.values(pcsRef.current).forEach(pc => {
+        vStream.getTracks().forEach(track => {
+          if (!pc.getSenders().find(s => s.track?.kind === track.kind)) {
+            pc.addTrack(track, vStream);
+          }
+        });
+      });
     } catch (e) {
       setCamError('Virtual camera error: ' + e.message);
     }
   }, [user]);
 
-  /* Stop camera */
   const stopCamera = () => {
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current);
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(t => t.stop());
+      localStreamRef.current = null;
     }
-    if (stream) {
-      stream.getTracks().forEach((t) => t.stop());
-    }
-    setStream(null);
     setCamEnabled(false);
     setIsVirtualCam(false);
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = null;
-    }
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
   };
 
   const toggleMic = () => {
-    if (stream) {
-      const audioTracks = stream.getAudioTracks();
-      if (audioTracks.length > 0) {
-        audioTracks.forEach((t) => {
-          t.enabled = !t.enabled;
-        });
-        setMicEnabled((prev) => !prev);
+    if (localStreamRef.current) {
+      const audio = localStreamRef.current.getAudioTracks();
+      if (audio.length) {
+        audio.forEach(t => { t.enabled = !t.enabled; });
+        setMicEnabled(p => !p);
       } else {
-        alert('No microphone was active on this stream.');
+        alert('No microphone active on this stream.');
       }
     }
   };
 
   const copyInvite = () => {
-    if (typeof window !== 'undefined') {
-      navigator.clipboard.writeText(window.location.href);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+    navigator.clipboard.writeText(window.location.href);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
-  /* Cleanup on unmount */
   useEffect(() => {
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-      if (stream) stream.getTracks().forEach((t) => t.stop());
+      if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
+      Object.values(pcsRef.current).forEach(pc => pc.close());
     };
-  }, [stream]);
+  }, []);
 
-  const peers = members.filter((m) => !m.isMe);
+  const peers      = members.filter(m => !m.isMe);
   const totalSlots = members.length;
-  const gridCols = totalSlots <= 2 ? 2 : totalSlots <= 4 ? 2 : 3;
+  const gridCols   = totalSlots <= 2 ? 2 : totalSlots <= 4 ? 2 : 3;
 
   return (
     <div className={styles.wrapper}>
       <div className={styles.header}>
         <div className={styles.headerTitleGroup}>
           <span className={styles.headerTitle}>📹 Room Cameras</span>
-          <span className={styles.verifiedTag}>Verified Users</span>
+          <span className={styles.verifiedTag}>Live WebRTC</span>
         </div>
         <span className={styles.onlineBadge}>
           {members.length} Active Member{members.length !== 1 ? 's' : ''}
@@ -236,19 +384,17 @@ export default function CameraGrid({ members = [], user, code }) {
       </div>
 
       <div className={styles.grid} style={{ '--cols': gridCols }}>
-        {/* ── LOCAL USER CAMERA ── */}
+        {/* ── MY CAMERA ── */}
         <div className={`${styles.camCard} ${styles.myCard}`}>
           <div className={styles.camBox}>
-            {/* Always keep video element mounted so WebRTC / getUserMedia stream binds instantly */}
             <video
-              ref={setLocalVideoNode}
+              ref={localVideoRef}
               autoPlay
               muted
               playsInline
               className={styles.camVideo}
               style={{ display: camEnabled ? 'block' : 'none' }}
             />
-
             {!camEnabled && (
               <div className={styles.camPlaceholder}>
                 <span className={styles.avatarEmoji}>{user?.avatar || '👤'}</span>
@@ -257,11 +403,7 @@ export default function CameraGrid({ members = [], user, code }) {
                 </div>
               </div>
             )}
-
-            {/* Speaking / active ring */}
             <div className={styles.camGlow} />
-
-            {/* Name + status bar */}
             <div className={styles.camInfo}>
               <span className={styles.camName}>
                 {user?.name || 'You'} <span className={styles.youTag}>(You)</span>
@@ -272,21 +414,20 @@ export default function CameraGrid({ members = [], user, code }) {
                   {micEnabled ? '🎙️' : '🔇'}
                 </span>
                 {camEnabled && (
-                  <span
-                    className={styles.liveDot}
-                    title={isVirtualCam ? 'Virtual Test Cam' : 'Hardware Camera Active'}
-                  />
+                  <span className={styles.liveDot} title={isVirtualCam ? 'Virtual Test Cam' : 'Hardware Camera'} />
                 )}
               </div>
             </div>
           </div>
 
-          {/* Camera controls */}
           <div className={styles.camControls}>
             {!camEnabled ? (
               <div className={styles.camStartGroup}>
                 <button className={styles.btnStartCam} onClick={startCamera}>
                   📹 Enable Camera
+                </button>
+                <button className={styles.btnVirtualCamSmall} onClick={startVirtualCam}>
+                  ✨ Virtual Cam
                 </button>
               </div>
             ) : (
@@ -294,7 +435,7 @@ export default function CameraGrid({ members = [], user, code }) {
                 <button
                   className={`${styles.ctrlBtn} ${!micEnabled ? styles.ctrlOff : ''}`}
                   onClick={toggleMic}
-                  title={micEnabled ? 'Mute microphone' : 'Unmute microphone'}
+                  title={micEnabled ? 'Mute' : 'Unmute'}
                 >
                   {micEnabled ? '🎙️' : '🔇'}
                 </button>
@@ -309,7 +450,6 @@ export default function CameraGrid({ members = [], user, code }) {
             )}
           </div>
 
-          {/* Error Banner with helpful Virtual Cam Fallback */}
           {camError && (
             <div className={styles.camErrorBox}>
               <p className={styles.camErrorText}>⚠️ {camError}</p>
@@ -320,39 +460,24 @@ export default function CameraGrid({ members = [], user, code }) {
           )}
         </div>
 
-        {/* ── REAL GENUINE PEERS ONLY ── */}
-        {peers.map((peer) => (
-          <div key={peer.id} className={styles.camCard}>
-            <div className={styles.camBox}>
-              <div className={styles.camPlaceholder}>
-                <span className={styles.avatarEmoji}>{peer.avatar || '👤'}</span>
-                <div className={styles.genuinePeerLabel}>
-                  <span>✓ Authenticated Peer</span>
-                </div>
-              </div>
-
-              <div className={styles.camInfo}>
-                <span className={styles.camName}>
-                  {peer.name}
-                  {peer.isHost && <span className={styles.hostCrown}>👑</span>}
-                </span>
-                <div className={styles.camStatus}>
-                  <span className={styles.liveDot} />
-                </div>
-              </div>
-            </div>
-          </div>
+        {/* ── REMOTE PEERS with live WebRTC video ── */}
+        {peers.map(peer => (
+          <PeerVideo
+            key={peer.id}
+            peer={peer}
+            stream={remoteStreams[peer.id] || null}
+          />
         ))}
 
-        {/* Invite Friend Card when solo in room */}
+        {/* ── Invite card when solo ── */}
         {peers.length === 0 && (
           <div className={`${styles.camCard} ${styles.emptySlot}`}>
             <div className={styles.camBox}>
               <div className={styles.camPlaceholder}>
                 <span className={styles.inviteIcon}>👥</span>
-                <div className={styles.waitingLabel}>Invite genuine friends</div>
+                <div className={styles.waitingLabel}>Share the room code to invite friends!</div>
                 <button className={styles.inviteButton} onClick={copyInvite}>
-                  {copied ? '✓ Link Copied!' : `🔗 Share Room Code: ${code}`}
+                  {copied ? '✓ Link Copied!' : `🔗 Copy Room Link · ${code}`}
                 </button>
               </div>
             </div>
