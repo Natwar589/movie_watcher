@@ -86,12 +86,13 @@ function RoomContent() {
       try { sessionStorage.setItem('cinesync_user', JSON.stringify(u)); } catch {}
     }
 
-    const userId = u.id || `user_${Math.random().toString(36).slice(2, 8)}`;
-    const authUser = { ...u, id: userId };
+    // Every tab/window gets a distinct peer ID so multiple tabs never collide into 1 peer
+    const tabInstanceId = `peer_${Math.random().toString(36).slice(2, 7)}_${Date.now().toString(36).slice(-4)}`;
+    const authUser = { ...u, id: tabInstanceId };
     setUser(authUser);
 
     const me = {
-      id: userId,
+      id: tabInstanceId,
       name: authUser.name,
       avatar: authUser.avatar,
       isHost: !!authUser.isHost,
