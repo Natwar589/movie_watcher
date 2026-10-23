@@ -110,7 +110,7 @@ function RoomContent() {
     setIsReady(true);
 
     // 2. Connect to SSE stream
-    const es = new EventSource(`/api/room/${code}/events?peerId=${userId}_page`);
+    const es = new EventSource(`/api/room/${code}/events?peerId=${tabInstanceId}_page`);
     sseRef.current = es;
 
     es.onmessage = (event) => {
