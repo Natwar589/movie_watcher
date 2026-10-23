@@ -6,6 +6,9 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "build": {
+    "command": "npm run build"
+  },
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"
