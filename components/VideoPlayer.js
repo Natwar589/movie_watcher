@@ -56,8 +56,12 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [screenStream, setScreenStream] = useState(null);
   const [hasStreamAudio, setHasStreamAudio] = useState(false);
-  const [streamSourceType, setStreamSourceType] = useState('url'); // 'screen' | 'file' | 'url' | 'idle'
-  const [echoShield, setEchoShield] = useState(true); // Auto-mutes local playback of casted window to prevent echo
+  const [streamSourceType, setStreamSourceType] = useState('url'); // 'screen' | 'file' | 'url'
+  const [echoShield, setEchoShield] = useState(true);
+
+  // Track active URL for imperative use (avoids stale closures)
+  const activeUrlRef = useRef(url);
+  activeUrlRef.current = url;
 
   // Modals & inputs
   const [customInput, setCustomInput] = useState('');
@@ -171,38 +175,19 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       }
 
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          cursor: 'always',
-          displaySurface: 'window',
-        },
-        audio: true, // Captures tab / window audio when available
+        video: { cursor: 'always', displaySurface: 'window' },
+        audio: true,
       });
 
-      setScreenStream(stream);
-      setIsScreenSharing(true);
+      setScreenStream(stream); // master effect attaches it to video
       setStreamSourceType('screen');
-      const audioTracks = stream.getAudioTracks();
-      setHasStreamAudio(audioTracks.length > 0);
-
+      setHasStreamAudio(stream.getAudioTracks().length > 0);
       onLoaded('', `${user?.name || 'Host'}'s Shared Window (Live Movie Stream)`);
       setIsSourceModalOpen(false);
-
-      if (videoRef.current) {
-        videoRef.current.src = '';
-        videoRef.current.srcObject = stream;
-        videoRef.current.muted = true; // Anti-echo: host already hears from their own window
-        videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
-      }
-
-      // 🔑 Broadcast screen stream to all guests via WebRTC
-      onScreenShare?.(stream);
-
+      onScreenShare?.(stream); // broadcast to guests via WebRTC
       onSysMsg?.(`📺 ${user?.name || 'Host'} is now streaming their window/movie!`);
 
-      // If user stops sharing via browser native prompt
-      stream.getVideoTracks()[0].onended = () => {
-        stopScreenShare();
-      };
+      stream.getVideoTracks()[0].onended = () => stopScreenShare();
     } catch (err) {
       console.warn('Screen share was dismissed or failed:', err);
     }
@@ -222,26 +207,16 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
 
   const stopScreenShare = () => {
     if (screenStream) {
-      screenStream.getTracks().forEach((track) => track.stop());
-      setScreenStream(null);
+      screenStream.getTracks().forEach(t => t.stop());
+      setScreenStream(null); // master effect restores URL
     }
-    setIsScreenSharing(false);
     setStreamSourceType('url');
-
-    // Stop broadcasting screen to guests
-    onScreenShare?.(null);
-
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-      videoRef.current.muted = isMuted;
-      if (PRESET_MOVIES.length > 0) {
-        const fallback = PRESET_MOVIES[0];
-        onLoaded(fallback.url, fallback.title);
-        videoRef.current.src = fallback.url;
-        videoRef.current.load();
-      }
+    onScreenShare?.(null); // stop broadcasting to guests
+    // Restore fallback movie
+    if (PRESET_MOVIES.length > 0) {
+      const fallback = PRESET_MOVIES[0];
+      onLoaded(fallback.url, fallback.title);
     }
-
     onSysMsg?.(`⏹️ ${user?.name || 'Host'} stopped sharing their window.`);
   };
 
@@ -251,98 +226,93 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
   const handleLocalFileSelect = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     if (screenStream) {
-      screenStream.getTracks().forEach((track) => track.stop());
+      screenStream.getTracks().forEach(t => t.stop());
       setScreenStream(null);
-      setIsScreenSharing(false);
     }
-
     const localUrl = URL.createObjectURL(file);
-    onLoaded(localUrl, file.name);
+    onLoaded(localUrl, file.name); // master effect picks up new url
     setStreamSourceType('file');
     setIsSourceModalOpen(false);
-
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-      videoRef.current.src = localUrl;
-      videoRef.current.load();
-      videoRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
-    }
-
-    onSysMsg?.(`📁 ${user?.name || 'Host'} loaded local video: "${file.name}"`);
+    onSysMsg?.(`📁 ${user?.name || 'Host'} loaded: "${file.name}"`);
   };
 
   const selectPreset = (movie) => {
     if (screenStream) {
-      screenStream.getTracks().forEach((track) => track.stop());
+      screenStream.getTracks().forEach(t => t.stop());
       setScreenStream(null);
-      setIsScreenSharing(false);
     }
-
-    onLoaded(movie.url, movie.title);
+    onLoaded(movie.url, movie.title); // master effect picks up new url
     setStreamSourceType('url');
     setIsSourceModalOpen(false);
-
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-      videoRef.current.src = movie.url;
-      videoRef.current.load();
-      videoRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
-    }
   };
 
   const applyCustomUrl = (e) => {
     e.preventDefault();
     if (!customInput.trim()) return;
-
     if (screenStream) {
-      screenStream.getTracks().forEach((track) => track.stop());
+      screenStream.getTracks().forEach(t => t.stop());
       setScreenStream(null);
-      setIsScreenSharing(false);
     }
-
-    onLoaded(customInput.trim(), 'Custom Stream');
+    onLoaded(customInput.trim(), 'Custom Stream'); // master effect picks up new url
     setStreamSourceType('url');
     setIsSourceModalOpen(false);
-
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-      videoRef.current.src = customInput.trim();
-      videoRef.current.load();
-      videoRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
-    }
     setCustomInput('');
   };
 
-  // Default initial movie if idle
+  // Default initial movie if idle (host & guests get a preset movie on first load)
   useEffect(() => {
-    if (!url && !isScreenSharing && PRESET_MOVIES.length > 0) {
+    if (!url && !isScreenSharing && !remoteHostStream && PRESET_MOVIES.length > 0) {
       const first = PRESET_MOVIES[0];
       onLoaded(first.url, first.title);
     }
-  }, [url, isScreenSharing, onLoaded]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount only
 
-  // 🔑 Guest: attach incoming host screen stream to video element
+  /* ═══════════════════════════════════════════════════════════
+     MASTER VIDEO SOURCE CONTROLLER
+     Priority: remoteHostStream > local screenStream > url
+     This is the ONLY place that touches video.src / video.srcObject
+     ═══════════════════════════════════════════════════════════ */
   useEffect(() => {
-    if (!videoRef.current) return;
+    const v = videoRef.current;
+    if (!v) return;
+
     if (remoteHostStream) {
-      // Guest receives host screen — display it instead of URL
-      videoRef.current.srcObject = remoteHostStream;
-      videoRef.current.src = '';
-      videoRef.current.muted = false;
-      videoRef.current.play().catch(() => {});
+      // GUEST MODE: host is sharing their screen → show it
+      if (v.srcObject !== remoteHostStream) {
+        v.srcObject = remoteHostStream;
+        v.removeAttribute('src');
+        v.muted = false;
+        v.load();
+        v.play().catch(() => {});
+      }
       setIsPlaying(true);
-      setIsScreenSharing(true); // Treat as screen share state for UI
-    } else if (!isScreenSharing) {
-      // Stream ended — restore local URL playback
-      videoRef.current.srcObject = null;
-      if (url) {
-        videoRef.current.src = url;
-        videoRef.current.load();
+      setIsScreenSharing(true);
+    } else if (screenStream) {
+      // HOST MODE: sharing local screen
+      if (v.srcObject !== screenStream) {
+        v.srcObject = screenStream;
+        v.removeAttribute('src');
+        v.muted = true; // anti-echo: host hears it from source app
+        v.play().catch(() => {});
+      }
+      setIsScreenSharing(true);
+    } else {
+      // URL MODE: normal movie playback
+      if (v.srcObject) {
+        v.srcObject = null;
+        v.removeAttribute('src');
+      }
+      setIsScreenSharing(false);
+      if (url && v.getAttribute('src') !== url) {
+        v.src = url;
+        v.muted = false;
+        v.load();
+        v.play().catch(() => {});
       }
     }
-  }, [remoteHostStream, url, isScreenSharing]);
+  }, [remoteHostStream, screenStream, url]);
 
   // Keyboard controls
   useEffect(() => {
@@ -389,10 +359,8 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       <div className={styles.videoWrapper} onClick={!isScreenSharing ? togglePlay : undefined}>
         <video
           ref={videoRef}
-          src={!isScreenSharing && url ? url : undefined}
           className={styles.video}
           playsInline
-          autoPlay={isScreenSharing}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
           onEnded={() => setIsPlaying(false)}
