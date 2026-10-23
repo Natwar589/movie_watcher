@@ -1,0 +1,123 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  /* ── Linear / Raycast Subtle Design System Tokens ── */
+  
+  /* Surface Luminance Step Model (No pure black, no optical halation) */
+  --bg-page:               #08090a; /* Canvas void */
+  --bg-surface-low:        #0f1011; /* Navigation, sidebars, dock */
+  --bg-surface-card:       #121414; /* Cards, panels, viewports */
+  --bg-surface-high:       #161718; /* Hovered surfaces, elevated bars */
+  --bg-surface-highest:    #1c1c1d; /* Modals, tooltips, dialogs */
+  --bg-surface-active:     #222326;
+
+  /* Overlays & Translucent Micro-layers */
+  --overlay-faint:         rgba(255, 255, 255, 0.03);
+  --overlay-subtle:        rgba(255, 255, 255, 0.06);
+  --overlay-medium:        rgba(255, 255, 255, 0.10);
+  --overlay-hover:         rgba(255, 255, 255, 0.08);
+
+  /* Micro-Borders (Wireframes in moonlight) */
+  --border-subtle:         rgba(255, 255, 255, 0.07);
+  --border-default:        rgba(255, 255, 255, 0.12);
+  --border-focused:        rgba(255, 255, 255, 0.22);
+  --border-divider:        #2e2e32;
+
+  /* Typography Hierarchy (Cool Slates & Silvers) */
+  --text-primary:          #f7f8f8; /* Soft off-white */
+  --text-secondary:        #d0d6e0; /* Cool silver */
+  --text-muted:            #8a8f98; /* Neutral slate */
+  --text-subtle:           #62666d; /* Hint / timestamp */
+  --text-faint:            #44474e;
+
+  /* Subtle Accent System (Functional, calm, single-brand) */
+  --accent-brand:          #5e6ad2; /* Linear signature indigo */
+  --accent-brand-hover:    #7170ff;
+  --accent-brand-subtle:   rgba(94, 106, 210, 0.14);
+  --accent-brand-border:   rgba(94, 106, 210, 0.35);
+
+  /* Desaturated Functional Status Badges */
+  --status-success:        #27a644; /* Calibrated sage green */
+  --status-success-bg:     rgba(39, 166, 68, 0.12);
+  --status-warning:        #f0bf00; /* Subtle warm amber */
+  --status-warning-bg:     rgba(240, 191, 0, 0.12);
+  --status-danger:         #f34e52; /* Muted coral red */
+  --status-danger-bg:      rgba(243, 78, 82, 0.12);
+
+  /* Typography & Technical Layout */
+  --font-sans:             'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono:             'JetBrains Mono', SFMono-Regular, Menlo, monospace;
+
+  --radius-xs:             5px;
+  --radius-sm:             8px;
+  --radius-md:             12px;
+  --radius-lg:             16px;
+  --radius-full:           9999px;
+
+  /* Subtle Elevation Shadows (Soft & Diffused) */
+  --shadow-card:           0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-elevated:       0 8px 30px rgba(0, 0, 0, 0.6);
+  --shadow-ambient:        0 0 60px rgba(94, 106, 210, 0.12);
+}
+
+html {
+  scroll-behavior: smooth;
+  color-scheme: dark;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.5;
+}
+
+/* Precision Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-default);
+}
+
+/* Subtle Text Gradient */
+.subtle-gradient-text {
+  background: linear-gradient(180deg, #f7f8f8 0%, #8a8f98 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Tactile Micro-Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleUp {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pulseIndicator {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}

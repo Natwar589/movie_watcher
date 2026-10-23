@@ -1,0 +1,344 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface-low);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 10px 14px;
+  flex-shrink: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.headerTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.headerTitle {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.verifiedTag {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 600;
+  color: var(--status-success);
+  background: var(--status-success-bg);
+  border: 1px solid rgba(39, 166, 68, 0.2);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.onlineBadge {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--overlay-subtle);
+  border: 1px solid var(--border-subtle);
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+}
+
+/* Grid */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 2), 1fr);
+  gap: 6px;
+}
+
+/* Each Camera Card */
+.camCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.camBox {
+  position: relative;
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  aspect-ratio: 16/10;
+  background: var(--bg-surface-card);
+  border: 1px solid var(--border-subtle);
+  transition: border-color 0.15s ease;
+}
+
+.camBox:hover {
+  border-color: var(--border-default);
+}
+
+/* Local Video Feed */
+.camVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transform: scaleX(-1);
+}
+
+/* Placeholder */
+.camPlaceholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--bg-surface-card);
+  position: relative;
+  overflow: hidden;
+  padding: 6px;
+  text-align: center;
+}
+
+.avatarEmoji {
+  font-size: 1.6rem;
+  opacity: 0.9;
+}
+
+.camOffLabel {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  color: var(--text-subtle);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--bg-page);
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-subtle);
+}
+
+.genuinePeerLabel {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 600;
+  color: var(--status-success);
+  background: var(--status-success-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid rgba(39, 166, 68, 0.2);
+}
+
+.camGlow {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-xs);
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--overlay-subtle);
+}
+
+/* Name Overlay */
+.camInfo {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(to top, rgba(8, 9, 10, 0.9) 0%, transparent 100%);
+  padding: 12px 6px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 2;
+}
+
+.camName {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 90px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.youTag {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.hostCrown {
+  font-size: 9px;
+}
+
+.camStatus {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.micDot {
+  font-size: 0.65rem;
+}
+
+.micOff {
+  opacity: 0.45;
+}
+
+.liveDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--status-success);
+}
+
+/* Empty Invite Slot */
+.emptySlot .camBox {
+  border-style: dashed;
+  border-color: var(--border-subtle);
+  background: transparent;
+}
+
+.inviteIcon {
+  font-size: 16px;
+  opacity: 0.5;
+}
+
+.waitingLabel {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.inviteButton {
+  background: var(--bg-surface-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  padding: 3px 8px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.inviteButton:hover {
+  background: var(--bg-surface-high);
+  color: var(--text-primary);
+  border-color: var(--border-default);
+}
+
+.inviteButton:active {
+  transform: scale(0.98);
+}
+
+/* Controls */
+.camControls {
+  display: flex;
+  justify-content: center;
+}
+
+.camStartGroup {
+  width: 100%;
+}
+
+.btnStartCam {
+  background: var(--bg-surface-card);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  padding: 5px 10px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  width: 100%;
+}
+
+.btnStartCam:hover {
+  background: var(--bg-surface-high);
+  border-color: var(--border-focused);
+}
+
+.btnStartCam:active {
+  transform: scale(0.98);
+}
+
+.ctrlBtns {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+}
+
+.ctrlBtn {
+  flex: 1;
+  background: var(--bg-surface-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  padding: 4px;
+  border-radius: var(--radius-xs);
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ctrlBtn:hover {
+  background: var(--bg-surface-high);
+  color: var(--text-primary);
+  border-color: var(--border-default);
+}
+
+.ctrlBtn:active {
+  transform: scale(0.98);
+}
+
+.ctrlOff {
+  opacity: 0.5;
+}
+
+.camErrorBox {
+  margin-top: 4px;
+  background: var(--status-danger-bg);
+  border: 1px solid rgba(243, 78, 82, 0.25);
+  border-radius: var(--radius-xs);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.camErrorText {
+  font-size: 0.62rem;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.35;
+}
+
+.btnVirtualCam {
+  background: var(--bg-surface-card);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  font-size: 0.65rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.btnVirtualCam:hover {
+  background: var(--bg-surface-high);
+}
