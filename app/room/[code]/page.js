@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useRef, Suspense, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import VideoPlayer from '../../../components/VideoPlayer';
 import CameraGrid  from '../../../components/CameraGrid';
 import ChatPanel   from '../../../components/ChatPanel';
@@ -9,7 +9,6 @@ import styles from './room.module.css';
 
 function RoomContent() {
   const { code } = useParams();
-  const router   = useRouter();
 
   const [user,       setUser]      = useState(null);
   const [members,    setMembers]   = useState([]);
@@ -19,55 +18,52 @@ function RoomContent() {
   const [isReady,    setIsReady]   = useState(false);
   const [activeTab,  setActiveTab] = useState('watch');
 
-  const channelRef = useRef(null);
+  const meRef    = useRef(null); // current user info ref (avoids stale closures)
+  const sseRef   = useRef(null); // EventSource ref
 
-  /* Add system message */
+  /* ─── Helpers ─── */
   const addSysMsg = useCallback((text) => {
     setMessages(prev => [...prev, { id: `${Date.now()}-${Math.random()}`, type: 'system', text }]);
   }, []);
 
-  /* Add authenticated chat message */
   const addMsg = useCallback((sender, text) => {
     setMessages(prev => [...prev, {
       id: `${Date.now()}-${Math.random()}`,
       type: 'chat',
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        avatar: sender.avatar,
-        isHost: !!sender.isHost,
-        isMe: !!sender.isMe,
-      },
+      sender: { id: sender.id, name: sender.name, avatar: sender.avatar, isHost: !!sender.isHost, isMe: !!sender.isMe },
       text,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     }]);
   }, []);
 
-  /* ─────────────────────────────────────────────────────────
-     AUTHENTICATION & REAL PEER SYNC (BroadcastChannel)
-     No bots, no fake comments — only genuine authenticated users
-     ───────────────────────────────────────────────────────── */
+  /* ─── POST helper to broadcast events to all room members ─── */
+  const broadcast = useCallback((payload) => {
+    fetch(`/api/room/${code}/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  }, [code]);
+
+  /* ─── Bootstrap: load user, connect SSE ─── */
   useEffect(() => {
-    // 1. Safely load or auto-initialize genuine authenticated user
+    if (!code) return;
+
+    // 1. Load or auto-generate authenticated user
     let u = null;
     try {
       const raw = sessionStorage.getItem('cinesync_user') || localStorage.getItem('cinesync_user');
       if (raw) u = JSON.parse(raw);
-    } catch (e) {
-      console.warn('Storage read error:', e);
-    }
+    } catch {}
 
     if (!u) {
-      // Auto-generate guest profile so user is never locked out
       u = {
         name: `User_${Math.floor(Math.random() * 900 + 100)}`,
         avatar: '🍿',
         roomName: 'Watch Party',
         isHost: false,
       };
-      try {
-        sessionStorage.setItem('cinesync_user', JSON.stringify(u));
-      } catch (e) {}
+      try { sessionStorage.setItem('cinesync_user', JSON.stringify(u)); } catch {}
     }
 
     const userId = u.id || `user_${Math.random().toString(36).slice(2, 8)}`;
@@ -79,117 +75,109 @@ function RoomContent() {
       name: authUser.name,
       avatar: authUser.avatar,
       isHost: !!authUser.isHost,
-      isMe: true,
       joinedAt: Date.now(),
     };
+    meRef.current = me;
 
-    setMembers([me]);
+    // Add self immediately
+    setMembers([{ ...me, isMe: true }]);
     setMessages([{
       id: Date.now(),
       type: 'system',
-      text: `🔒 Authenticated as ${authUser.name} (${authUser.isHost ? 'Room Creator / Host' : 'Verified Member'}). Room: ${code}`,
+      text: `🔒 Joined as ${authUser.name} (${authUser.isHost ? 'Host' : 'Member'}) · Room: ${code}`,
     }]);
     setIsReady(true);
 
-    // 2. Connect to Room's real cross-tab/peer channel
-    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-      const channel = new BroadcastChannel(`cinesync_room_${code}`);
-      channelRef.current = channel;
+    // 2. Connect to SSE stream
+    const es = new EventSource(`/api/room/${code}/events`);
+    sseRef.current = es;
 
-      // Announce this genuine user joined
-      channel.postMessage({
-        type: 'PEER_JOIN',
-        peer: { id: me.id, name: me.name, avatar: me.avatar, isHost: me.isHost },
-      });
+    es.onmessage = (event) => {
+      let data;
+      try { data = JSON.parse(event.data); } catch { return; }
+      if (!data?.type) return;
 
-      // Handle real peer events
-      channel.onmessage = (event) => {
-        const data = event.data;
-        if (!data || !data.type) return;
-
-        if (data.type === 'PEER_JOIN') {
-          // A real user joined from another window/tab
-          if (data.peer && data.peer.id !== me.id) {
-            setMembers(prev => {
-              if (prev.some(m => m.id === data.peer.id)) return prev;
-              return [...prev, { ...data.peer, isMe: false }];
-            });
-            addSysMsg(`👋 ${data.peer.avatar} ${data.peer.name} (${data.peer.isHost ? 'Host' : 'Member'}) entered the room.`);
-
-            // Reply so the new peer knows we are here
-            channel.postMessage({
-              type: 'PEER_PRESENT',
-              peer: { id: me.id, name: me.name, avatar: me.avatar, isHost: me.isHost },
-            });
-          }
-        } else if (data.type === 'PEER_PRESENT') {
-          // Existing peer responding
-          if (data.peer && data.peer.id !== me.id) {
-            setMembers(prev => {
-              if (prev.some(m => m.id === data.peer.id)) return prev;
-              return [...prev, { ...data.peer, isMe: false }];
-            });
-          }
-        } else if (data.type === 'PEER_CHAT') {
-          // Genuine message sent by another real user
-          if (data.sender && data.sender.id !== me.id) {
-            addMsg(data.sender, data.text);
-          }
-        } else if (data.type === 'PEER_LEAVE') {
-          if (data.peerId) {
-            setMembers(prev => prev.filter(m => m.id !== data.peerId));
-            if (data.name) addSysMsg(`🚪 ${data.name} left the room.`);
-          }
-        } else if (data.type === 'MEDIA_UPDATE') {
-          if (data.title && data.url) {
-            setVideoUrl(data.url);
-            setVideoTitle(data.title);
-            addSysMsg(`🎬 ${data.senderName || 'Host'} switched movie to: "${data.title}"`);
-          }
+      if (data.type === 'ROOM_STATE') {
+        // Server sends current peers when we connect
+        const peers = (data.peers || []).filter(p => p.id !== me.id);
+        setMembers(prev => {
+          const existing = new Set(prev.map(m => m.id));
+          const newPeers = peers.filter(p => !existing.has(p.id)).map(p => ({ ...p, isMe: false }));
+          return [...prev, ...newPeers];
+        });
+        if (peers.length > 0) {
+          addSysMsg(`👥 ${peers.length} member(s) already in room.`);
         }
-      };
-    }
-
-    return () => {
-      if (channelRef.current) {
-        channelRef.current.postMessage({ type: 'PEER_LEAVE', peerId: me.id, name: me.name });
-        channelRef.current.close();
+      } else if (data.type === 'PEER_JOIN') {
+        if (data.peer?.id && data.peer.id !== me.id) {
+          setMembers(prev => {
+            if (prev.some(m => m.id === data.peer.id)) return prev;
+            return [...prev, { ...data.peer, isMe: false }];
+          });
+          addSysMsg(`👋 ${data.peer.avatar} ${data.peer.name} joined the room.`);
+        }
+      } else if (data.type === 'PEER_LEAVE') {
+        if (data.peerId && data.peerId !== me.id) {
+          setMembers(prev => prev.filter(m => m.id !== data.peerId));
+          if (data.name) addSysMsg(`🚪 ${data.name} left the room.`);
+        }
+      } else if (data.type === 'PEER_CHAT') {
+        if (data.sender?.id !== me.id) {
+          addMsg(data.sender, data.text);
+        }
+      } else if (data.type === 'MEDIA_UPDATE') {
+        if (data.title && data.url) {
+          setVideoUrl(data.url);
+          setVideoTitle(data.title);
+          addSysMsg(`🎬 ${data.senderName || 'Host'} switched to: "${data.title}"`);
+        }
       }
     };
-  }, [code, router, addSysMsg, addMsg]);
 
-  /* Genuine User Comment Sender */
-  const sendMessage = (text) => {
-    if (!user || !text.trim()) return;
-
-    const meSender = {
-      id: user.id || 'me',
-      name: user.name,
-      avatar: user.avatar,
-      isHost: !!user.isHost,
-      isMe: true,
+    es.onerror = () => {
+      // SSE auto-reconnects; silently handle
     };
 
-    // Add locally to sender's view
-    addMsg(meSender, text.trim());
+    // 3. Announce join to ALL members (including other devices/browsers)
+    fetch(`/api/room/${code}/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'PEER_JOIN', peer: { id: me.id, name: me.name, avatar: me.avatar, isHost: me.isHost } }),
+    }).catch(() => {});
 
-    // Broadcast only to real peers in this room
-    if (channelRef.current) {
-      channelRef.current.postMessage({
-        type: 'PEER_CHAT',
-        sender: {
-          id: user.id || 'me',
-          name: user.name,
-          avatar: user.avatar,
-          isHost: !!user.isHost,
-          isMe: false,
-        },
-        text: text.trim(),
-      });
-    }
+    // 4. Cleanup on leave
+    const handleUnload = () => {
+      navigator.sendBeacon(`/api/room/${code}/events`,
+        new Blob([JSON.stringify({ type: 'PEER_LEAVE', peerId: me.id, name: me.name })],
+          { type: 'application/json' })
+      );
+    };
+    window.addEventListener('beforeunload', handleUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      es.close();
+      fetch(`/api/room/${code}/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'PEER_LEAVE', peerId: me.id, name: me.name }),
+      }).catch(() => {});
+    };
+  }, [code, addSysMsg, addMsg]);
+
+  /* ─── Send chat message ─── */
+  const sendMessage = (text) => {
+    if (!user || !text.trim()) return;
+    const me = meRef.current;
+    const sender = { id: me.id, name: me.name, avatar: me.avatar, isHost: !!me.isHost, isMe: true };
+
+    // Add locally first
+    addMsg(sender, text.trim());
+
+    // Broadcast to others
+    broadcast({ type: 'PEER_CHAT', sender: { ...sender, isMe: false }, text: text.trim() });
   };
 
-  /* Genuine Emoji Reaction Sender */
   const sendReaction = (emoji) => {
     if (!user) return;
     sendMessage(emoji);
@@ -199,22 +187,18 @@ function RoomContent() {
     setVideoUrl(url);
     setVideoTitle(title);
     addSysMsg(`🎬 Now loaded: "${title}"`);
-
-    // Broadcast media change to real peers
-    if (channelRef.current) {
-      channelRef.current.postMessage({
-        type: 'MEDIA_UPDATE',
-        url,
-        title,
-        senderName: user?.name,
-      });
-    }
-  }, [addSysMsg, user?.name]);
+    broadcast({ type: 'MEDIA_UPDATE', url, title, senderName: user?.name });
+  }, [addSysMsg, user?.name, broadcast]);
 
   const leaveRoom = () => {
     if (confirm('Are you sure you want to exit the room?')) {
-      if (channelRef.current && user) {
-        channelRef.current.postMessage({ type: 'PEER_LEAVE', peerId: user.id, name: user.name });
+      const me = meRef.current;
+      if (me) {
+        fetch(`/api/room/${code}/events`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'PEER_LEAVE', peerId: me.id, name: me.name }),
+        }).catch(() => {});
       }
       sessionStorage.removeItem('cinesync_user');
       window.location.href = '/';
@@ -290,8 +274,8 @@ export default function RoomPage() {
   return (
     <Suspense
       fallback={
-        <div className={styles.loading}>
-          <div className={styles.spinner} />
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', background:'#080c14', color:'#fff', flexDirection:'column', gap:'16px' }}>
+          <div style={{ width:'40px', height:'40px', border:'3px solid rgba(255,255,255,0.1)', borderTopColor:'#7c3aed', borderRadius:'50%', animation:'spin 0.8s linear infinite' }} />
           <p>Connecting securely...</p>
         </div>
       }
