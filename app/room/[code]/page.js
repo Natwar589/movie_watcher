@@ -17,6 +17,7 @@ function RoomContent() {
   const [videoUrl,   setVideoUrl]  = useState('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
   const [videoTitle, setVideoTitle]= useState('Big Buck Bunny (Animation Short)');
   const [isReady,    setIsReady]   = useState(false);
+  const [activeTab,  setActiveTab] = useState('watch');
 
   const channelRef = useRef(null);
 
@@ -216,7 +217,7 @@ function RoomContent() {
         channelRef.current.postMessage({ type: 'PEER_LEAVE', peerId: user.id, name: user.name });
       }
       sessionStorage.removeItem('cinesync_user');
-      router.push('/');
+      window.location.href = '/';
     }
   };
 

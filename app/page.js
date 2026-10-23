@@ -33,43 +33,47 @@ export default function HomePage() {
 
   function handleCreate(e) {
     if (e) e.preventDefault();
-    const finalName = name.trim() || 'Host';
-    const finalRoom = roomName.trim() || `${finalName}'s Cinema Room`;
+    const finalName = (name || '').trim() || 'Host';
+    const finalRoom = (roomName || '').trim() || `${finalName}'s Cinema Room`;
     const roomCode = uid(5);
-    const userData = JSON.stringify({
+    const userData = {
       name: finalName,
-      avatar,
+      avatar: avatar || '👑',
       roomName: finalRoom,
       isHost: true,
-    });
+      id: `host_${Math.random().toString(36).slice(2, 8)}`,
+    };
     try {
-      sessionStorage.setItem('cinesync_user', userData);
-      localStorage.setItem('cinesync_user', userData);
+      sessionStorage.setItem('cinesync_user', JSON.stringify(userData));
+      localStorage.setItem('cinesync_user', JSON.stringify(userData));
     } catch (err) {
       console.warn('Storage write error:', err);
     }
-    router.push(`/room/${roomCode}`);
+    // Use window.location for guaranteed navigation even across origins
+    window.location.href = `/room/${roomCode}`;
   }
 
   function handleJoin(e) {
     if (e) e.preventDefault();
-    if (!code.trim() || code.trim().length < 3) {
+    const trimmedCode = (code || '').trim();
+    if (!trimmedCode || trimmedCode.length < 3) {
       return setError('Please enter a valid room passcode (e.g. XK9QZ).');
     }
-    const finalName = name.trim() || `Viewer_${Math.floor(Math.random() * 900 + 100)}`;
-    const userData = JSON.stringify({
+    const finalName = (name || '').trim() || `Viewer_${Math.floor(Math.random() * 900 + 100)}`;
+    const userData = {
       name: finalName,
-      avatar: avatar === '👑' ? '🍿' : avatar,
-      roomName: `${finalName}'s Room`,
+      avatar: avatar || '🍿',
+      roomName: 'Watch Party',
       isHost: false,
-    });
+      id: `guest_${Math.random().toString(36).slice(2, 8)}`,
+    };
     try {
-      sessionStorage.setItem('cinesync_user', userData);
-      localStorage.setItem('cinesync_user', userData);
+      sessionStorage.setItem('cinesync_user', JSON.stringify(userData));
+      localStorage.setItem('cinesync_user', JSON.stringify(userData));
     } catch (err) {
       console.warn('Storage write error:', err);
     }
-    router.push(`/room/${code.trim().toUpperCase()}`);
+    window.location.href = `/room/${trimmedCode.toUpperCase()}`;
   }
 
   return (
@@ -96,7 +100,7 @@ export default function HomePage() {
           <button className={styles.btnSecondary} onClick={openJoin}>
             Enter Passcode
           </button>
-          <button className={styles.btnPrimary} onClick={handleCreate} title="Instantly host a watch party">
+          <button className={styles.btnPrimary} onClick={openCreate} title="Host a watch party">
             Host Watch Party
           </button>
         </div>
@@ -121,7 +125,7 @@ export default function HomePage() {
         <div className={styles.actions}>
           <button
             className={styles.btnHeroPrimary}
-            onClick={handleCreate}
+            onClick={openCreate}
             title="Instantly generate a room and start hosting"
           >
             <span>Host a Watch Party</span>
@@ -131,13 +135,6 @@ export default function HomePage() {
           </button>
           <button className={styles.btnHeroSecondary} onClick={openJoin}>
             <span>Join with Passcode</span>
-          </button>
-          <button
-            className={styles.btnSecondary}
-            onClick={openCreate}
-            title="Customize your display name and room name"
-          >
-            ⚙️ Custom Setup
           </button>
         </div>
 
@@ -218,7 +215,7 @@ export default function HomePage() {
                 <div className={styles.mockupChatHeader}>💬 Live Verified Chat</div>
                 <div className={styles.mockupMsgItem}>
                   <span className={styles.mockupSender}>👑 Natwar:</span>
-                  <span>Audio & video streaming in full sync! 🍿</span>
+                  <span>Audio &amp; video streaming in full sync! 🍿</span>
                 </div>
                 <div className={styles.mockupMsgItem}>
                   <span className={styles.mockupSender}>Sarah:</span>
