@@ -36,7 +36,7 @@ function formatTime(seconds) {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
-export default function VideoPlayer({ url, title, onLoaded, user, members, onSysMsg }) {
+export default function VideoPlayer({ url, title, onLoaded, user, members, onSysMsg, onScreenShare, remoteHostStream }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -190,12 +190,12 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       if (videoRef.current) {
         videoRef.current.src = '';
         videoRef.current.srcObject = stream;
-        // CRITICAL ANTI-ECHO FIX:
-        // Broadcaster already hears their movie from Netflix/YouTube/VLC window!
-        // Muting this local preview stops speaker feedback and double-delayed sound.
-        videoRef.current.muted = true;
+        videoRef.current.muted = true; // Anti-echo: host already hears from their own window
         videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
       }
+
+      // 🔑 Broadcast screen stream to all guests via WebRTC
+      onScreenShare?.(stream);
 
       onSysMsg?.(`📺 ${user?.name || 'Host'} is now streaming their window/movie!`);
 
@@ -228,9 +228,11 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
     setIsScreenSharing(false);
     setStreamSourceType('url');
 
+    // Stop broadcasting screen to guests
+    onScreenShare?.(null);
+
     if (videoRef.current) {
       videoRef.current.srcObject = null;
-      // Restore normal playback mute state
       videoRef.current.muted = isMuted;
       if (PRESET_MOVIES.length > 0) {
         const fallback = PRESET_MOVIES[0];
@@ -320,6 +322,27 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       onLoaded(first.url, first.title);
     }
   }, [url, isScreenSharing, onLoaded]);
+
+  // 🔑 Guest: attach incoming host screen stream to video element
+  useEffect(() => {
+    if (!videoRef.current) return;
+    if (remoteHostStream) {
+      // Guest receives host screen — display it instead of URL
+      videoRef.current.srcObject = remoteHostStream;
+      videoRef.current.src = '';
+      videoRef.current.muted = false;
+      videoRef.current.play().catch(() => {});
+      setIsPlaying(true);
+      setIsScreenSharing(true); // Treat as screen share state for UI
+    } else if (!isScreenSharing) {
+      // Stream ended — restore local URL playback
+      videoRef.current.srcObject = null;
+      if (url) {
+        videoRef.current.src = url;
+        videoRef.current.load();
+      }
+    }
+  }, [remoteHostStream, url, isScreenSharing]);
 
   // Keyboard controls
   useEffect(() => {

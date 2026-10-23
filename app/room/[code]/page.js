@@ -17,6 +17,9 @@ function RoomContent() {
   const [videoTitle, setVideoTitle]= useState('Big Buck Bunny (Animation Short)');
   const [isReady,    setIsReady]   = useState(false);
   const [activeTab,  setActiveTab] = useState('watch');
+  // Screen share streaming: host -> guests
+  const [hostScreenStream,   setHostScreenStream]   = useState(null); // host's getDisplayMedia stream
+  const [remoteHostStream,   setRemoteHostStream]   = useState(null); // guest receives host screen
 
   const meRef    = useRef(null); // current user info ref (avoids stale closures)
   const sseRef   = useRef(null); // EventSource ref
@@ -237,12 +240,20 @@ function RoomContent() {
                 user={user}
                 members={members}
                 onSysMsg={addSysMsg}
+                onScreenShare={setHostScreenStream}
+                remoteHostStream={remoteHostStream}
               />
             </div>
 
             {/* RIGHT: Live Camera Feeds + Authenticated Chat */}
             <div className={styles.rightPane}>
-              <CameraGrid members={members} user={user} code={code} />
+              <CameraGrid
+                members={members}
+                user={user}
+                code={code}
+                hostScreenStream={hostScreenStream}
+                onRemoteHostStream={setRemoteHostStream}
+              />
               <ChatPanel
                 messages={messages}
                 onSend={sendMessage}

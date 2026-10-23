@@ -54,11 +54,13 @@ function PeerVideo({ peer, stream }) {
   );
 }
 
-export default function CameraGrid({ members = [], user, code }) {
+export default function CameraGrid({ members = [], user, code, hostScreenStream, onRemoteHostStream }) {
   const localVideoRef    = useRef(null);
-  const localStreamRef   = useRef(null);   // MediaStream for my camera
-  const pcsRef           = useRef({});      // Map<peerId, RTCPeerConnection>
-  const pendingRef       = useRef({});      // ICE candidates buffered before remote desc
+  const localStreamRef   = useRef(null);   // camera MediaStream
+  const pcsRef           = useRef({});      // Map<peerId, RTCPeerConnection> — camera
+  const screenPcsRef     = useRef({});      // Map<peerId, RTCPeerConnection> — screen share
+  const pendingRef       = useRef({});
+  const screenPendingRef = useRef({});
   const meRef            = useRef(user);
   meRef.current          = user;
 
@@ -79,6 +81,56 @@ export default function CameraGrid({ members = [], user, code }) {
       body: JSON.stringify({ ...payload, to, from: meRef.current?.id }),
     }).catch(() => {});
   }, [code]);
+
+  /* ── Screen-share specific RTCPeerConnection (host→guest one-way) ── */
+  const createScreenPC = useCallback((peerId) => {
+    if (screenPcsRef.current[peerId]) return screenPcsRef.current[peerId];
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+    screenPcsRef.current[peerId] = pc;
+    screenPendingRef.current[peerId] = [];
+
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) signal(peerId, { type: 'SCREEN_ICE', candidate });
+    };
+
+    // Guest receives the host's screen track here
+    pc.ontrack = (event) => {
+      const [stream] = event.streams;
+      onRemoteHostStream?.(stream || null);
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+        delete screenPcsRef.current[peerId];
+        onRemoteHostStream?.(null);
+      }
+    };
+    return pc;
+  }, [signal, onRemoteHostStream]);
+
+  /* ── When host's screen stream changes, broadcast to all guests ── */
+  useEffect(() => {
+    const peers = members.filter(m => !m.isMe);
+    if (!hostScreenStream) {
+      // Host stopped sharing — close all screen PCs
+      Object.values(screenPcsRef.current).forEach(pc => pc.close());
+      screenPcsRef.current = {};
+      return;
+    }
+    // Host started sharing — send offers to all current guests
+    peers.forEach(async (peer) => {
+      const pc = createScreenPC(peer.id);
+      hostScreenStream.getTracks().forEach(track => {
+        const existing = pc.getSenders().find(s => s.track?.id === track.id);
+        if (!existing) pc.addTrack(track, hostScreenStream);
+      });
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        signal(peer.id, { type: 'SCREEN_OFFER', sdp: pc.localDescription });
+      } catch {}
+    });
+  }, [hostScreenStream, members, createScreenPC, signal]);
 
   /* ── Create RTCPeerConnection for a peer ── */
   const createPC = useCallback((peerId, polite) => {
@@ -137,11 +189,11 @@ export default function CameraGrid({ members = [], user, code }) {
     const { type, from, sdp, candidate } = data;
     if (!from || from === meRef.current?.id) return;
 
+    // ── Camera peer connections ──
     if (type === 'OFFER') {
-      const pc = createPC(from, false); // we are polite (responder)
+      const pc = createPC(from, false);
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-        // Flush buffered ICE
         for (const c of (pendingRef.current[from] || [])) {
           await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
         }
@@ -166,12 +218,46 @@ export default function CameraGrid({ members = [], user, code }) {
       if (pc && pc.remoteDescription) {
         await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
       } else {
-        // Buffer ICE until remote desc is set
         if (!pendingRef.current[from]) pendingRef.current[from] = [];
         pendingRef.current[from].push(candidate);
       }
     }
-  }, [createPC, signal]);
+
+    // ── Screen share peer connections (guest receives host screen) ──
+    else if (type === 'SCREEN_OFFER') {
+      const pc = createScreenPC(from);
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        for (const c of (screenPendingRef.current[from] || [])) {
+          await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+        }
+        screenPendingRef.current[from] = [];
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        signal(from, { type: 'SCREEN_ANSWER', sdp: pc.localDescription });
+      } catch {}
+    } else if (type === 'SCREEN_ANSWER') {
+      const pc = screenPcsRef.current[from];
+      if (pc && pc.signalingState !== 'stable') {
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+          for (const c of (screenPendingRef.current[from] || [])) {
+            await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+          }
+          screenPendingRef.current[from] = [];
+        } catch {}
+      }
+    } else if (type === 'SCREEN_ICE') {
+      const pc = screenPcsRef.current[from];
+      if (pc && pc.remoteDescription) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+      } else {
+        if (!screenPendingRef.current[from]) screenPendingRef.current[from] = [];
+        screenPendingRef.current[from].push(candidate);
+      }
+    }
+  }, [createPC, createScreenPC, signal]);
+
 
   /* ── Subscribe to SSE room events (includes WebRTC signals) ── */
   useEffect(() => {
