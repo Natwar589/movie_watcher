@@ -907,3 +907,40 @@
 .urlSubmitBtn:hover {
   background: var(--bg-surface-high);
 }
+
+.waitingHostStreamOverlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: rgba(13, 17, 23, 0.88);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
+  padding: 24px 32px;
+  border-radius: 12px;
+  text-align: center;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.waitingStreamIcon {
+  font-size: 32px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.waitingStreamTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.waitingStreamSub {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  max-width: 320px;
+}

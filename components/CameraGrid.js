@@ -93,16 +93,20 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
       if (candidate) signal(peerId, { type: 'SCREEN_ICE', candidate });
     };
 
-    // Guest receives the host's screen track here
+    // Guest receives the host's screen or local movie stream here
     pc.ontrack = (event) => {
-      const [stream] = event.streams;
-      onRemoteHostStream?.(stream || null);
+      let stream = event.streams?.[0];
+      if (!stream && event.track) {
+        stream = new MediaStream([event.track]);
+      }
+      if (stream) {
+        onRemoteHostStream?.(stream);
+      }
     };
 
     pc.onconnectionstatechange = () => {
       if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
         delete screenPcsRef.current[peerId];
-        onRemoteHostStream?.(null);
       }
     };
     return pc;
@@ -112,13 +116,20 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
   useEffect(() => {
     const peers = members.filter(m => !m.isMe);
     if (!hostScreenStream) {
-      // Host stopped sharing — close all screen PCs
+      // Host stopped sharing — inform all guests and close screen PCs
+      peers.forEach(peer => signal(peer.id, { type: 'SCREEN_STOP' }));
       Object.values(screenPcsRef.current).forEach(pc => pc.close());
       screenPcsRef.current = {};
       return;
     }
-    // Host started sharing — send offers to all current guests
+    // Host is sharing — send offers to all current guests
     peers.forEach(async (peer) => {
+      if (screenPcsRef.current[peer.id]) {
+        const existingPc = screenPcsRef.current[peer.id];
+        if (existingPc.connectionState === 'connected') return;
+        existingPc.close();
+        delete screenPcsRef.current[peer.id];
+      }
       const pc = createScreenPC(peer.id);
       hostScreenStream.getTracks().forEach(track => {
         const existing = pc.getSenders().find(s => s.track?.id === track.id);
@@ -128,7 +139,9 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         signal(peer.id, { type: 'SCREEN_OFFER', sdp: pc.localDescription });
-      } catch {}
+      } catch (err) {
+        console.warn('SCREEN_OFFER create error:', err);
+      }
     });
   }, [hostScreenStream, members, createScreenPC, signal]);
 
@@ -149,7 +162,7 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
 
     // Receive remote video stream
     pc.ontrack = (event) => {
-      const [remoteStream] = event.streams;
+      const remoteStream = event.streams?.[0] || new MediaStream([event.track]);
       setRemoteStreams(prev => ({ ...prev, [peerId]: remoteStream }));
     };
 
@@ -162,12 +175,14 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
 
     // Negotiation needed (called when tracks are added)
     pc.onnegotiationneeded = async () => {
-      if (!polite) return; // Only the "impolite" (newer joiner) makes offer
       try {
+        if (pc.signalingState !== 'stable') return;
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         signal(peerId, { type: 'OFFER', sdp: pc.localDescription });
-      } catch {}
+      } catch (err) {
+        console.warn('Negotiation error:', err);
+      }
     };
 
     pc.onconnectionstatechange = () => {
@@ -193,7 +208,14 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
     if (type === 'OFFER') {
       const pc = createPC(from, false);
       try {
-        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        if (pc.signalingState !== 'stable') {
+          await Promise.all([
+            pc.setLocalDescription({ type: 'rollback' }).catch(() => {}),
+            pc.setRemoteDescription(new RTCSessionDescription(sdp)),
+          ]);
+        } else {
+          await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        }
         for (const c of (pendingRef.current[from] || [])) {
           await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
         }
@@ -201,7 +223,9 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         signal(from, { type: 'ANSWER', sdp: pc.localDescription });
-      } catch {}
+      } catch (err) {
+        console.warn('OFFER handling error:', err);
+      }
     } else if (type === 'ANSWER') {
       const pc = pcsRef.current[from];
       if (pc && pc.signalingState !== 'stable') {
@@ -211,7 +235,9 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
             await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
           }
           pendingRef.current[from] = [];
-        } catch {}
+        } catch (err) {
+          console.warn('ANSWER handling error:', err);
+        }
       }
     } else if (type === 'ICE') {
       const pc = pcsRef.current[from];
@@ -235,7 +261,9 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         signal(from, { type: 'SCREEN_ANSWER', sdp: pc.localDescription });
-      } catch {}
+      } catch (err) {
+        console.warn('SCREEN_OFFER handling error:', err);
+      }
     } else if (type === 'SCREEN_ANSWER') {
       const pc = screenPcsRef.current[from];
       if (pc && pc.signalingState !== 'stable') {
@@ -245,7 +273,9 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
             await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
           }
           screenPendingRef.current[from] = [];
-        } catch {}
+        } catch (err) {
+          console.warn('SCREEN_ANSWER handling error:', err);
+        }
       }
     } else if (type === 'SCREEN_ICE') {
       const pc = screenPcsRef.current[from];
@@ -255,9 +285,14 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
         if (!screenPendingRef.current[from]) screenPendingRef.current[from] = [];
         screenPendingRef.current[from].push(candidate);
       }
+    } else if (type === 'SCREEN_STOP') {
+      if (screenPcsRef.current[from]) {
+        screenPcsRef.current[from].close();
+        delete screenPcsRef.current[from];
+      }
+      onRemoteHostStream?.(null);
     }
-  }, [createPC, createScreenPC, signal]);
-
+  }, [createPC, createScreenPC, signal, onRemoteHostStream]);
 
   /* ── Subscribe to SSE room events (includes WebRTC signals) ── */
   useEffect(() => {
@@ -270,10 +305,9 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
       try { data = JSON.parse(event.data); } catch { return; }
       if (!data?.type) return;
 
-      if (['OFFER', 'ANSWER', 'ICE'].includes(data.type)) {
+      if (['OFFER', 'ANSWER', 'ICE', 'SCREEN_OFFER', 'SCREEN_ANSWER', 'SCREEN_ICE', 'SCREEN_STOP'].includes(data.type)) {
         await handleSignal(data);
       }
-      // Other event types (PEER_JOIN etc.) are handled in page.js via its own SSE connection
     };
 
     return () => es.close();
@@ -325,14 +359,21 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
         localVideoRef.current.play().catch(() => {});
       }
 
-      // Add tracks to all existing peer connections
-      Object.values(pcsRef.current).forEach(pc => {
+      // Add tracks to all existing peer connections and offer immediately
+      Object.entries(pcsRef.current).forEach(async ([peerId, pc]) => {
         s.getTracks().forEach(track => {
           const senders = pc.getSenders();
-          if (!senders.find(s => s.track?.kind === track.kind)) {
+          if (!senders.find(sd => sd.track?.kind === track.kind)) {
             pc.addTrack(track, s);
           }
         });
+        try {
+          if (pc.signalingState === 'stable') {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            signal(peerId, { type: 'OFFER', sdp: pc.localDescription });
+          }
+        } catch {}
       });
 
       // Create new PCs for all current peers and send offers
@@ -355,7 +396,7 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
         setCamError(`Could not start camera: ${err.message}`);
       }
     }
-  }, [members, createPC]);
+  }, [members, createPC, signal]);
 
   /* ── Virtual test camera (canvas-based) ── */
   const startVirtualCam = useCallback(() => {
@@ -403,13 +444,20 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
         localVideoRef.current.play().catch(() => {});
       }
 
-      // Share virtual stream with existing peers
-      Object.values(pcsRef.current).forEach(pc => {
+      // Share virtual stream with existing peers and offer immediately
+      Object.entries(pcsRef.current).forEach(async ([peerId, pc]) => {
         vStream.getTracks().forEach(track => {
           if (!pc.getSenders().find(s => s.track?.kind === track.kind)) {
             pc.addTrack(track, vStream);
           }
         });
+        try {
+          if (pc.signalingState === 'stable') {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            signal(peerId, { type: 'OFFER', sdp: pc.localDescription });
+          }
+        } catch {}
       });
     } catch (e) {
       setCamError('Virtual camera error: ' + e.message);

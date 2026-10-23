@@ -231,10 +231,32 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       setScreenStream(null);
     }
     const localUrl = URL.createObjectURL(file);
-    onLoaded(localUrl, file.name); // master effect picks up new url
     setStreamSourceType('file');
     setIsSourceModalOpen(false);
-    onSysMsg?.(`📁 ${user?.name || 'Host'} loaded: "${file.name}"`);
+
+    // Host loads the file into video player
+    const v = videoRef.current;
+    if (v) {
+      v.srcObject = null;
+      v.src = localUrl;
+      v.muted = false;
+      v.load();
+      v.play().then(() => {
+        setIsPlaying(true);
+        // Automatically capture local video stream and broadcast to all guests!
+        try {
+          const cap = v.captureStream ? v.captureStream() : (v.mozCaptureStream ? v.mozCaptureStream() : null);
+          if (cap) {
+            onScreenShare?.(cap);
+          }
+        } catch (err) {
+          console.warn('captureStream error:', err);
+        }
+      }).catch(() => {});
+    }
+
+    onLoaded(localUrl, file.name); // notifies page and guests
+    onSysMsg?.(`📁 ${user?.name || 'Host'} loaded local file: "${file.name}" (streaming to room)`);
   };
 
   const selectPreset = (movie) => {
@@ -242,6 +264,7 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       screenStream.getTracks().forEach(t => t.stop());
       setScreenStream(null);
     }
+    onScreenShare?.(null); // clear any active host stream
     onLoaded(movie.url, movie.title); // master effect picks up new url
     setStreamSourceType('url');
     setIsSourceModalOpen(false);
@@ -254,6 +277,7 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       screenStream.getTracks().forEach(t => t.stop());
       setScreenStream(null);
     }
+    onScreenShare?.(null); // clear any active host stream
     onLoaded(customInput.trim(), 'Custom Stream'); // master effect picks up new url
     setStreamSourceType('url');
     setIsSourceModalOpen(false);
@@ -279,12 +303,11 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
     if (!v) return;
 
     if (remoteHostStream) {
-      // GUEST MODE: host is sharing their screen → show it
+      // GUEST MODE: host is sharing their screen or local movie → show it
       if (v.srcObject !== remoteHostStream) {
-        v.srcObject = remoteHostStream;
         v.removeAttribute('src');
+        v.srcObject = remoteHostStream;
         v.muted = false;
-        v.load();
         v.play().catch(() => {});
       }
       setIsPlaying(true);
@@ -292,8 +315,8 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
     } else if (screenStream) {
       // HOST MODE: sharing local screen
       if (v.srcObject !== screenStream) {
-        v.srcObject = screenStream;
         v.removeAttribute('src');
+        v.srcObject = screenStream;
         v.muted = true; // anti-echo: host hears it from source app
         v.play().catch(() => {});
       }
@@ -306,13 +329,18 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       }
       setIsScreenSharing(false);
       if (url && v.getAttribute('src') !== url) {
-        v.src = url;
-        v.muted = false;
-        v.load();
-        v.play().catch(() => {});
+        // If it's a blob: URL and this user is a guest, don't set invalid local blob url
+        if (url.startsWith('blob:') && !isHost) {
+          v.removeAttribute('src');
+        } else {
+          v.src = url;
+          v.muted = false;
+          v.load();
+          v.play().catch(() => {});
+        }
       }
     }
-  }, [remoteHostStream, screenStream, url]);
+  }, [remoteHostStream, screenStream, url, isHost]);
 
   // Keyboard controls
   useEffect(() => {
@@ -369,9 +397,20 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
         />
 
         {/* Center Play Overlay Icon when paused and not screen sharing */}
-        {!isPlaying && !isScreenSharing && (
+        {!isPlaying && !isScreenSharing && !url?.startsWith('blob:') && (
           <div className={styles.centerPlayButton} onClick={togglePlay}>
             <div className={styles.playIconPulse}>▶</div>
+          </div>
+        )}
+
+        {/* Guest waiting for host local video stream */}
+        {!isHost && url?.startsWith('blob:') && !remoteHostStream && (
+          <div className={styles.waitingHostStreamOverlay}>
+            <div className={styles.waitingStreamIcon}>📡</div>
+            <div className={styles.waitingStreamTitle}>Connecting to Host&apos;s Movie Stream</div>
+            <div className={styles.waitingStreamSub}>
+              {title ? `"${title}"` : 'Host video'} is streaming live via WebRTC...
+            </div>
           </div>
         )}
 

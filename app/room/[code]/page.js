@@ -55,16 +55,33 @@ function RoomContent() {
     // 1. Load or auto-generate authenticated user
     let u = null;
     try {
-      const raw = sessionStorage.getItem('cinesync_user') || localStorage.getItem('cinesync_user');
-      if (raw) u = JSON.parse(raw);
+      const rawSession = sessionStorage.getItem('cinesync_user');
+      if (rawSession) {
+        u = JSON.parse(rawSession);
+      } else {
+        const rawLocal = localStorage.getItem('cinesync_user');
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal);
+          // Distinct tab opening room: assign fresh unique guest identity to prevent peer ID collision
+          u = {
+            name: `Viewer_${Math.floor(Math.random() * 900 + 100)}`,
+            avatar: '🍿',
+            roomName: parsed.roomName || 'Watch Party',
+            isHost: false,
+            id: `guest_${Math.random().toString(36).slice(2, 8)}`,
+          };
+          try { sessionStorage.setItem('cinesync_user', JSON.stringify(u)); } catch {}
+        }
+      }
     } catch {}
 
     if (!u) {
       u = {
-        name: `User_${Math.floor(Math.random() * 900 + 100)}`,
+        name: `Viewer_${Math.floor(Math.random() * 900 + 100)}`,
         avatar: '🍿',
         roomName: 'Watch Party',
         isHost: false,
+        id: `guest_${Math.random().toString(36).slice(2, 8)}`,
       };
       try { sessionStorage.setItem('cinesync_user', JSON.stringify(u)); } catch {}
     }
@@ -92,7 +109,7 @@ function RoomContent() {
     setIsReady(true);
 
     // 2. Connect to SSE stream
-    const es = new EventSource(`/api/room/${code}/events`);
+    const es = new EventSource(`/api/room/${code}/events?peerId=${userId}_page`);
     sseRef.current = es;
 
     es.onmessage = (event) => {
