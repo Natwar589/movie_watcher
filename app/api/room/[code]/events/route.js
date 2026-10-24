@@ -30,12 +30,14 @@ function broadcast(room, data, excludePeerId = null) {
 
 function sendTo(room, targetPeerId, data) {
   const ctrl = room.clients.get(targetPeerId);
-  if (!ctrl) return;
+  if (!ctrl) return false;
   const msg = `data: ${JSON.stringify(data)}\n\n`;
   try {
     ctrl.enqueue(new TextEncoder().encode(msg));
+    return true;
   } catch {
     room.clients.delete(targetPeerId);
+    return false;
   }
 }
 
@@ -103,7 +105,10 @@ export async function POST(request, { params }) {
 
   // Targeted WebRTC signaling messages (offer / answer / ice-candidate)
   if (to) {
-    sendTo(room, to, body);
+    const delivered = sendTo(room, to, body);
+    if (!delivered) {
+      broadcast(room, body, body.from);
+    }
     return new Response('OK', { status: 200 });
   }
 

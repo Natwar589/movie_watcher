@@ -6,6 +6,22 @@ const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:openrelay.metered.ca:80' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
   ],
 };
 
@@ -126,7 +142,7 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
     peers.forEach(async (peer) => {
       if (screenPcsRef.current[peer.id]) {
         const existingPc = screenPcsRef.current[peer.id];
-        if (existingPc.connectionState === 'connected') return;
+        if (existingPc.connectionState === 'connected' || existingPc.connectionState === 'connecting') return;
         existingPc.close();
         delete screenPcsRef.current[peer.id];
       }
@@ -201,8 +217,9 @@ export default function CameraGrid({ members = [], user, code, hostScreenStream,
 
   /* ── Handle incoming WebRTC signaling messages ── */
   const handleSignal = useCallback(async (data) => {
-    const { type, from, sdp, candidate } = data;
+    const { type, from, to, sdp, candidate } = data;
     if (!from || from === meRef.current?.id) return;
+    if (to && to !== meRef.current?.id) return;
 
     // ── Camera peer connections ──
     if (type === 'OFFER') {

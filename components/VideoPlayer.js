@@ -241,18 +241,30 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       v.src = localUrl;
       v.muted = false;
       v.load();
-      v.play().then(() => {
-        setIsPlaying(true);
-        // Automatically capture local video stream and broadcast to all guests!
+
+      const transmit = () => {
         try {
           const cap = v.captureStream ? v.captureStream() : (v.mozCaptureStream ? v.mozCaptureStream() : null);
-          if (cap) {
+          if (cap && cap.getTracks().length > 0) {
             onScreenShare?.(cap);
           }
         } catch (err) {
           console.warn('captureStream error:', err);
         }
-      }).catch(() => {});
+      };
+
+      v.onloadeddata = transmit;
+      v.onplay = () => {
+        setIsPlaying(true);
+        transmit();
+      };
+
+      v.play().then(() => {
+        setIsPlaying(true);
+        transmit();
+      }).catch(() => {
+        transmit();
+      });
     }
 
     onLoaded(localUrl, file.name); // notifies page and guests
@@ -410,6 +422,9 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
             <div className={styles.waitingStreamTitle}>Connecting to Host&apos;s Movie Stream</div>
             <div className={styles.waitingStreamSub}>
               {title ? `"${title}"` : 'Host video'} is streaming live via WebRTC...
+            </div>
+            <div className={styles.waitingStreamHint}>
+              💡 Host: Click Play to transmit video frames. If your movie uses unsupported codecs (.mkv / AC3), you can also click &ldquo;Share My Window&rdquo; for full-resolution streaming with audio.
             </div>
           </div>
         )}
