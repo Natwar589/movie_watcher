@@ -20,9 +20,12 @@ function RoomContent() {
   // Screen share streaming: host -> guests
   const [hostScreenStream,   setHostScreenStream]   = useState(null); // host's getDisplayMedia stream
   const [remoteHostStream,   setRemoteHostStream]   = useState(null); // guest receives host screen
+  const [remoteSyncEvent,    setRemoteSyncEvent]    = useState(null); // play, pause, seek sync events
+  const [isLocalMovie,       setIsLocalMovie]       = useState(false); // whether current movie is a host local file
 
-  const meRef    = useRef(null); // current user info ref (avoids stale closures)
-  const sseRef   = useRef(null); // EventSource ref
+  const meRef         = useRef(null); // current user info ref (avoids stale closures)
+  const sseRef        = useRef(null); // EventSource ref
+  const videoStateRef = useRef({ url: videoUrl, title: videoTitle, isLocalFile: false });
 
   /* ─── Helpers ─── */
   const addSysMsg = useCallback((text) => {
@@ -136,6 +139,18 @@ function RoomContent() {
             return [...prev, { ...data.peer, isMe: false }];
           });
           addSysMsg(`👋 ${data.peer.avatar} ${data.peer.name} joined the room.`);
+
+          // If current user is host, catch up new peer with current movie
+          if (me.isHost && videoStateRef.current.title) {
+            broadcast({
+              type: 'MEDIA_STATE_SYNC',
+              url: videoStateRef.current.url,
+              title: videoStateRef.current.title,
+              isLocalFile: videoStateRef.current.isLocalFile,
+              senderId: me.id,
+              senderName: me.name,
+            });
+          }
         }
       } else if (data.type === 'PEER_LEAVE') {
         if (data.peerId && data.peerId !== me.id) {
@@ -147,10 +162,28 @@ function RoomContent() {
           addMsg(data.sender, data.text);
         }
       } else if (data.type === 'MEDIA_UPDATE') {
-        if (data.title && data.url) {
-          setVideoUrl(data.url);
+        if (data.title) {
+          setVideoUrl(data.url || '');
           setVideoTitle(data.title);
+          const isLocal = !!data.isLocalFile || (data.url && data.url.startsWith('blob:'));
+          setIsLocalMovie(isLocal);
+          videoStateRef.current = { url: data.url || '', title: data.title, isLocalFile: isLocal };
           addSysMsg(`🎬 ${data.senderName || 'Host'} switched to: "${data.title}"`);
+        }
+      } else if (data.type === 'MEDIA_SYNC') {
+        if (data.senderId !== me.id) {
+          setRemoteSyncEvent({ ...data, _ts: Date.now() });
+        }
+      } else if (data.type === 'MEDIA_STATE_SYNC') {
+        if (data.senderId !== me.id) {
+          if (data.title) {
+            setVideoUrl(data.url || '');
+            setVideoTitle(data.title);
+            const isLocal = !!data.isLocalFile || (data.url && data.url.startsWith('blob:'));
+            setIsLocalMovie(isLocal);
+            videoStateRef.current = { url: data.url || '', title: data.title, isLocalFile: isLocal };
+          }
+          setRemoteSyncEvent({ ...data, _ts: Date.now() });
         }
       }
     };
@@ -184,7 +217,7 @@ function RoomContent() {
         body: JSON.stringify({ type: 'PEER_LEAVE', peerId: me.id, name: me.name }),
       }).catch(() => {});
     };
-  }, [code, addSysMsg, addMsg]);
+  }, [code, addSysMsg, addMsg, broadcast]);
 
   /* ─── Send chat message ─── */
   const sendMessage = (text) => {
@@ -204,12 +237,31 @@ function RoomContent() {
     sendMessage(emoji);
   };
 
-  const onVideoLoaded = useCallback((url, title) => {
+  const handleSyncAction = useCallback((actionData) => {
+    broadcast({
+      type: 'MEDIA_SYNC',
+      ...actionData,
+      senderId: meRef.current?.id,
+      senderName: meRef.current?.name,
+    });
+  }, [broadcast]);
+
+  const onVideoLoaded = useCallback((url, title, isLocal = false) => {
     setVideoUrl(url);
     setVideoTitle(title);
+    const localFlag = isLocal || url?.startsWith('blob:');
+    setIsLocalMovie(localFlag);
+    videoStateRef.current = { url, title, isLocalFile: localFlag };
     addSysMsg(`🎬 Now loaded: "${title}"`);
-    broadcast({ type: 'MEDIA_UPDATE', url, title, senderName: user?.name });
-  }, [addSysMsg, user?.name, broadcast]);
+    broadcast({
+      type: 'MEDIA_UPDATE',
+      url,
+      title,
+      isLocalFile: localFlag,
+      senderName: user?.name,
+      senderId: user?.id,
+    });
+  }, [addSysMsg, user?.name, user?.id, broadcast]);
 
   const leaveRoom = () => {
     if (confirm('Are you sure you want to exit the room?')) {
@@ -260,6 +312,9 @@ function RoomContent() {
                 onSysMsg={addSysMsg}
                 onScreenShare={setHostScreenStream}
                 remoteHostStream={remoteHostStream}
+                onSyncAction={handleSyncAction}
+                remoteSyncEvent={remoteSyncEvent}
+                isLocalMovie={isLocalMovie}
               />
             </div>
 

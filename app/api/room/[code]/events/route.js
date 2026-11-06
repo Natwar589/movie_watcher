@@ -121,10 +121,14 @@ export async function POST(request, { params }) {
     broadcast(room, { type: 'PEER_LEAVE', peerId, name: body.name });
   } else if (type === 'PEER_CHAT' && sender && text) {
     broadcast(room, { type: 'PEER_CHAT', sender, text }, sender.id);
-  } else if (type === 'MEDIA_UPDATE' && url) {
-    broadcast(room, { type: 'MEDIA_UPDATE', url, title, senderName });
+  } else if (type === 'MEDIA_UPDATE') {
+    broadcast(room, body, body.senderId);
+  } else if (type === 'MEDIA_SYNC') {
+    broadcast(room, body, body.senderId);
+  } else if (type === 'MEDIA_STATE_SYNC') {
+    broadcast(room, body, body.senderId);
   } else {
-    broadcast(room, body);
+    broadcast(room, body, body.from || body.senderId);
   }
 
   return new Response('OK', { status: 200 });

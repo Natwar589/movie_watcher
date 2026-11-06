@@ -925,7 +925,7 @@
   border-radius: 12px;
   text-align: center;
   z-index: 10;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .waitingStreamIcon {
@@ -934,15 +934,64 @@
 }
 
 .waitingStreamTitle {
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: 1.05rem;
+  font-weight: 700;
   color: #f1f5f9;
 }
 
 .waitingStreamSub {
   font-size: 0.85rem;
   color: #94a3b8;
-  max-width: 320px;
+  max-width: 380px;
+  word-break: break-word;
+}
+
+.guestLocalSyncCard {
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px dashed rgba(139, 92, 246, 0.4);
+  border-radius: 10px;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  max-width: 380px;
+}
+
+.guestLocalSyncTitle {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.guestLocalSyncDesc {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.guestLocalSyncBtn {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 18px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.guestLocalSyncBtn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(99, 102, 241, 0.5);
+}
+
+.guestLocalSyncBtn:active {
+  transform: translateY(0);
 }
 
 .waitingStreamHint {
@@ -952,7 +1001,7 @@
   border: 1px solid rgba(99, 102, 241, 0.25);
   padding: 8px 12px;
   border-radius: 8px;
-  max-width: 360px;
+  max-width: 380px;
   line-height: 1.4;
   margin-top: 4px;
 }

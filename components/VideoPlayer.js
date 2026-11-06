@@ -36,10 +36,23 @@ function formatTime(seconds) {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
-export default function VideoPlayer({ url, title, onLoaded, user, members, onSysMsg, onScreenShare, remoteHostStream }) {
+export default function VideoPlayer({
+  url,
+  title,
+  onLoaded,
+  user,
+  members,
+  onSysMsg,
+  onScreenShare,
+  remoteHostStream,
+  onSyncAction,
+  remoteSyncEvent,
+  isLocalMovie,
+}) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const fileInputRef = useRef(null);
+  const guestFileInputRef = useRef(null);
 
   // Playback & stream state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -58,6 +71,11 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
   const [hasStreamAudio, setHasStreamAudio] = useState(false);
   const [streamSourceType, setStreamSourceType] = useState('url'); // 'screen' | 'file' | 'url'
   const [echoShield, setEchoShield] = useState(true);
+
+  // Guest local file sync state (for watching matching movie file in 100% sync)
+  const [guestLocalUrl, setGuestLocalUrl] = useState(null);
+  const [guestLocalFileName, setGuestLocalFileName] = useState('');
+  const isRemoteActionRef = useRef(false);
 
   // Track active URL for imperative use (avoids stale closures)
   const activeUrlRef = useRef(url);
@@ -93,6 +111,9 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
         .then(() => {
           setIsPlaying(true);
           onSysMsg?.(`▶️ ${user?.name || 'Someone'} resumed playback`);
+          if (!isRemoteActionRef.current) {
+            onSyncAction?.({ action: 'play', currentTime: videoRef.current.currentTime });
+          }
         })
         .catch((e) => {
           console.warn('Video play deferred:', e.message);
@@ -101,8 +122,11 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       videoRef.current.pause();
       setIsPlaying(false);
       onSysMsg?.(`⏸️ ${user?.name || 'Someone'} paused playback`);
+      if (!isRemoteActionRef.current) {
+        onSyncAction?.({ action: 'pause', currentTime: videoRef.current.currentTime });
+      }
     }
-  }, [isScreenSharing, user, onSysMsg]);
+  }, [isScreenSharing, user, onSysMsg, onSyncAction]);
 
   const handleSeek = (e) => {
     if (isScreenSharing) return;
@@ -111,6 +135,9 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       videoRef.current.currentTime = time;
       setCurrentTime(time);
       onSysMsg?.(`⏩ ${user?.name || 'Someone'} jumped to ${formatTime(time)}`);
+      if (!isRemoteActionRef.current) {
+        onSyncAction?.({ action: 'seek', currentTime: time });
+      }
     }
   };
 
@@ -142,8 +169,49 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
     if (videoRef.current) {
       videoRef.current.playbackRate = speed;
       onSysMsg?.(`⚡ Playback speed set to ${speed}x`);
+      if (!isRemoteActionRef.current) {
+        onSyncAction?.({ action: 'speed', speed });
+      }
     }
   };
+
+  /* ── Apply remote sync events (from other room members) ── */
+  useEffect(() => {
+    if (!remoteSyncEvent || !videoRef.current || isScreenSharing) return;
+    const { action, currentTime: remoteTime, speed, senderName } = remoteSyncEvent;
+    const v = videoRef.current;
+
+    isRemoteActionRef.current = true;
+    if (action === 'play') {
+      if (typeof remoteTime === 'number' && Math.abs(v.currentTime - remoteTime) > 0.6) {
+        v.currentTime = remoteTime;
+      }
+      v.play()
+        .then(() => setIsPlaying(true))
+        .catch(() => {});
+    } else if (action === 'pause') {
+      if (typeof remoteTime === 'number') {
+        v.currentTime = remoteTime;
+      }
+      v.pause();
+      setIsPlaying(false);
+    } else if (action === 'seek') {
+      if (typeof remoteTime === 'number') {
+        v.currentTime = remoteTime;
+        setCurrentTime(remoteTime);
+      }
+    } else if (action === 'speed') {
+      if (speed) {
+        v.playbackRate = speed;
+        setPlaybackRate(speed);
+      }
+    }
+
+    const timer = setTimeout(() => {
+      isRemoteActionRef.current = false;
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [remoteSyncEvent, isScreenSharing]);
 
   const toggleFullscreen = () => {
     if (!containerRef.current) return;
@@ -267,8 +335,25 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       });
     }
 
-    onLoaded(localUrl, file.name); // notifies page and guests
+    onLoaded(localUrl, file.name, true); // notifies page and guests
     onSysMsg?.(`📁 ${user?.name || 'Host'} loaded local file: "${file.name}" (streaming to room)`);
+  };
+
+  const handleGuestLocalFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const localUrl = URL.createObjectURL(file);
+    setGuestLocalUrl(localUrl);
+    setGuestLocalFileName(file.name);
+    const v = videoRef.current;
+    if (v) {
+      v.srcObject = null;
+      v.src = localUrl;
+      v.muted = false;
+      v.load();
+      v.play().then(() => setIsPlaying(true)).catch(() => {});
+    }
+    onSysMsg?.(`📁 Loaded your local file "${file.name}" in sync with the room.`);
   };
 
   const selectPreset = (movie) => {
@@ -276,8 +361,10 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       screenStream.getTracks().forEach(t => t.stop());
       setScreenStream(null);
     }
+    setGuestLocalUrl(null);
+    setGuestLocalFileName('');
     onScreenShare?.(null); // clear any active host stream
-    onLoaded(movie.url, movie.title); // master effect picks up new url
+    onLoaded(movie.url, movie.title, false); // master effect picks up new url
     setStreamSourceType('url');
     setIsSourceModalOpen(false);
   };
@@ -289,8 +376,10 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       screenStream.getTracks().forEach(t => t.stop());
       setScreenStream(null);
     }
+    setGuestLocalUrl(null);
+    setGuestLocalFileName('');
     onScreenShare?.(null); // clear any active host stream
-    onLoaded(customInput.trim(), 'Custom Stream'); // master effect picks up new url
+    onLoaded(customInput.trim(), 'Custom Stream', false); // master effect picks up new url
     setStreamSourceType('url');
     setIsSourceModalOpen(false);
     setCustomInput('');
@@ -300,14 +389,14 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
   useEffect(() => {
     if (!url && !isScreenSharing && !remoteHostStream && PRESET_MOVIES.length > 0) {
       const first = PRESET_MOVIES[0];
-      onLoaded(first.url, first.title);
+      onLoaded(first.url, first.title, false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // run once on mount only
 
   /* ═══════════════════════════════════════════════════════════
      MASTER VIDEO SOURCE CONTROLLER
-     Priority: remoteHostStream > local screenStream > url
+     Priority: remoteHostStream > local screenStream > (guestLocalUrl || url)
      This is the ONLY place that touches video.src / video.srcObject
      ═══════════════════════════════════════════════════════════ */
   useEffect(() => {
@@ -334,25 +423,27 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       }
       setIsScreenSharing(true);
     } else {
-      // URL MODE: normal movie playback
+      // URL MODE / LOCAL FILE SYNC: normal movie playback
       if (v.srcObject) {
         v.srcObject = null;
         v.removeAttribute('src');
       }
       setIsScreenSharing(false);
-      if (url && v.getAttribute('src') !== url) {
-        // If it's a blob: URL and this user is a guest, don't set invalid local blob url
-        if (url.startsWith('blob:') && !isHost) {
+
+      const targetSrc = (!isHost && guestLocalUrl) ? guestLocalUrl : url;
+      if (targetSrc && v.getAttribute('src') !== targetSrc) {
+        // If it's host's local blob: URL and this user is a guest without local copy, don't set invalid blob
+        if (targetSrc.startsWith('blob:') && !isHost && !guestLocalUrl) {
           v.removeAttribute('src');
         } else {
-          v.src = url;
+          v.src = targetSrc;
           v.muted = false;
           v.load();
           v.play().catch(() => {});
         }
       }
     }
-  }, [remoteHostStream, screenStream, url, isHost]);
+  }, [remoteHostStream, screenStream, url, isHost, guestLocalUrl]);
 
   // Keyboard controls
   useEffect(() => {
@@ -383,13 +474,22 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
       onMouseMove={handleMouseMove}
       onMouseLeave={() => (isPlaying || isScreenSharing) && setShowControls(false)}
     >
-      {/* Hidden local file input */}
+      {/* Hidden local file input for host */}
       <input
         ref={fileInputRef}
         type="file"
-        accept="video/*"
+        accept="video/*,.mkv,.mp4,.webm"
         style={{ display: 'none' }}
         onChange={handleLocalFileSelect}
+      />
+
+      {/* Hidden local file input for guest sync */}
+      <input
+        ref={guestFileInputRef}
+        type="file"
+        accept="video/*,.mkv,.mp4,.webm"
+        style={{ display: 'none' }}
+        onChange={handleGuestLocalFileSelect}
       />
 
       {/* Ambient background bloom */}
@@ -409,22 +509,43 @@ export default function VideoPlayer({ url, title, onLoaded, user, members, onSys
         />
 
         {/* Center Play Overlay Icon when paused and not screen sharing */}
-        {!isPlaying && !isScreenSharing && !url?.startsWith('blob:') && (
+        {!isPlaying && !isScreenSharing && (!url?.startsWith('blob:') || guestLocalUrl) && (
           <div className={styles.centerPlayButton} onClick={togglePlay}>
             <div className={styles.playIconPulse}>▶</div>
           </div>
         )}
 
-        {/* Guest waiting for host local video stream */}
-        {!isHost && url?.startsWith('blob:') && !remoteHostStream && (
+        {/* Guest waiting for host local video stream OR local file sync */}
+        {!isHost && (url?.startsWith('blob:') || isLocalMovie) && !remoteHostStream && !guestLocalUrl && (
           <div className={styles.waitingHostStreamOverlay}>
             <div className={styles.waitingStreamIcon}>📡</div>
             <div className={styles.waitingStreamTitle}>Connecting to Host&apos;s Movie Stream</div>
             <div className={styles.waitingStreamSub}>
               {title ? `"${title}"` : 'Host video'} is streaming live via WebRTC...
             </div>
+
+            {/* Quick sync option for guest */}
+            <div className={styles.guestLocalSyncCard}>
+              <div className={styles.guestLocalSyncTitle}>
+                🍿 Have this movie on your computer?
+              </div>
+              <p className={styles.guestLocalSyncDesc}>
+                Select your local copy to watch in crystal-clear quality with synchronized Play, Pause &amp; Seek!
+              </p>
+              <button
+                type="button"
+                className={styles.guestLocalSyncBtn}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  guestFileInputRef.current?.click();
+                }}
+              >
+                📁 Select My Local Copy to Sync
+              </button>
+            </div>
+
             <div className={styles.waitingStreamHint}>
-              💡 Host: Click Play to transmit video frames. If your movie uses unsupported codecs (.mkv / AC3), you can also click &ldquo;Share My Window&rdquo; for full-resolution streaming with audio.
+              💡 Host: Click Play to transmit frames, or click &ldquo;Share My Window&rdquo; to broadcast with full audio.
             </div>
           </div>
         )}
